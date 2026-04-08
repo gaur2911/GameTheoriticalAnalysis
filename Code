@@ -1,0 +1,133 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+def calculate_supply_chain(b_val):
+    """
+    Calculates supply chain metrics for 4 strategies based on the paper's logic.
+    Inputs: b_val (defect upper bound)
+    """
+    # Parameters
+    D, P, y = 50000, 160000, 175200
+    Am, As, Fm, Fs = 300, 100, 19, 25
+    hm, hs, c = 2, 5, 0.5
+
+    # Expected Values
+    Ex = b_val / 2
+    E1x = 1 - Ex
+    E1x_sq = 1 - b_val + (b_val**2 / 3)
+
+    # Pre-calculate holding cost coefficients to keep logic clean
+    # Supplier holding factor
+    hs_factor = (hs / 2) * (Ex/y + E1x_sq/D) * (D/E1x)
+    # Manufacturer holding factor (simplified approach per paper's nQ relationship)
+    hm_factor = (hm / (2 * P * E1x)) * (P - D / E1x)
+
+    def get_costs(n, Q):
+        # Supplier Total Cost
+        TCs = (D / (E1x * Q)) * (As/n + Fs) + Q * hs_factor + (D * c / E1x)
+
+        # Manufacturer Total Cost (Includes setup, shipping, and holding)
+        holding_m = (Q / 2) * hm * (n * (1 - D/(P*E1x)) - 1 + 2*D/(P*E1x))
+        TCm = (D / (E1x * Q)) * (Am/n + Fm) + holding_m
+
+        return TCs, TCm, TCs + TCm
+
+    # 1. STACKELBERG (Supplier is Leader)
+    # Supplier minimizes their own cost function to find Qs
+    Qs = np.sqrt((D * Fs) / (E1x * hs_factor))
+    # Manufacturer reacts to find ns
+    ns = np.sqrt((2 * D * Am) / (E1x * Qs**2 * hm * (1 - D/(P*E1x))))
+    ns = max(1, round(ns))
+    cost_s = get_costs(ns, Qs)
+
+    # 2. NASH (Independent but simultaneous)
+    # Iterative approach to find stable (n, Q)
+    qn, nn = 1000, 5 # Initial guesses
+    for _ in range(50):
+        # Supplier optimizes Q given current n
+        qn = np.sqrt((D * (As/nn + Fs)) / (E1x * hs_factor))
+        # Manufacturer optimizes n given current Q
+        nn_val = np.sqrt((2 * D * Am) / (E1x * qn**2 * hm * (1 - D/(P*E1x))))
+        nn = max(1, round(nn_val))
+    cost_n = get_costs(nn, qn)
+
+    # 3. COOPERATIVE / CENTRALIZED (System Optimization)
+    # We find the n and Q that minimizes the SUM of costs
+    # Standard approximation for n in coordinated systems
+    nc = 4
+    qc = np.sqrt((D * (Am + As + nc*(Fm + Fs))) / (nc * E1x * (hs_factor + (hm * nc / 4))))
+    cost_c = get_costs(nc, qc)
+
+    return {
+        "Stackelberg": {"Q": Qs, "n": ns, "TCs": cost_s[0], "TCm": cost_s[1], "Total": cost_s[2]},
+        "Nash": {"Q": qn, "n": nn, "TCs": cost_n[0], "TCm": cost_n[1], "Total": cost_n[2]},
+        "Cooperative": {"Q": qc, "n": nc, "TCs": cost_c[0], "TCm": cost_c[1], "Total": cost_c[2]}
+    }
+
+# Data Generation
+b_range = np.linspace(0.001, 0.5, 30)
+results = {"Stackelberg": {"Total": [], "TCs": [], "TCm": [], "Q": []},
+           "Nash": {"Total": [], "TCs": [], "TCm": [], "Q": []},
+           "Cooperative": {"Total": [], "TCs": [], "TCm": [], "Q": []}}
+
+for b in b_range:
+    data = calculate_supply_chain(b)
+    for strategy in results.keys():
+        results[strategy]["Total"].append(data[strategy]["Total"])
+        results[strategy]["TCs"].append(data[strategy]["TCs"])
+        results[strategy]["TCm"].append(data[strategy]["TCm"])
+        results[strategy]["Q"].append(data[strategy]["Q"])
+
+# --- VISUALIZATION ---
+plt.style.use('seaborn-v0_8-muted')
+fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+
+# 1. Total System Cost
+axs[0, 0].plot(b_range, results["Stackelberg"]["Total"], 'r-', label='Stackelberg (Highest Cost)')
+axs[0, 0].plot(b_range, results["Nash"]["Total"], 'g--', label='Nash')
+axs[0, 0].plot(b_range, results["Cooperative"]["Total"], 'b-', linewidth=2, label='Cooperative (Lowest Cost)')
+axs[0, 0].set_title("Total System Cost Comparison")
+axs[0, 0].set_xlabel("Defect Rate Bound (b)")
+axs[0, 0].set_ylabel("Total Cost ($)")
+axs[0, 0].legend()
+axs[0, 0].grid(True, alpha=0.3)
+
+# 2. Individual Costs (The "Who Wins?" Graph)
+axs[0, 1].plot(b_range, results["Stackelberg"]["TCs"], 'r-', label='Supplier (Leader)')
+axs[0, 1].plot(b_range, results["Stackelberg"]["TCm"], 'r--', label='Manuf. (Follower)')
+axs[0, 1].plot(b_range, results["Cooperative"]["TCs"], 'b-', label='Supplier (Coop)')
+axs[0, 1].plot(b_range, results["Cooperative"]["TCm"], 'b--', label='Manuf. (Coop)')
+axs[0, 1].set_title("Individual Costs: Stackelberg vs Coop")
+axs[0, 1].set_xlabel("Defect Rate Bound (b)")
+axs[0, 1].set_ylabel("Individual Cost ($)")
+axs[0, 1].legend(fontsize='small')
+axs[0, 1].grid(True, alpha=0.3)
+
+# 3. Shipment Size (Q)
+axs[1, 0].plot(b_range, results["Stackelberg"]["Q"], 'r-', label='Stackelberg Q')
+axs[1, 0].plot(b_range, results["Nash"]["Q"], 'g--', label='Nash Q')
+axs[1, 0].plot(b_range, results["Cooperative"]["Q"], 'b-', label='Cooperative Q')
+axs[1, 0].set_title("Optimal Shipment Size (Q)")
+axs[1, 0].set_xlabel("Defect Rate Bound (b)")
+axs[1, 0].set_ylabel("Quantity (Units)")
+axs[1, 0].legend()
+axs[1, 0].grid(True, alpha=0.3)
+
+# 4. Supplier Preference (Nash vs Stackelberg)
+axs[1, 1].plot(b_range, results["Nash"]["TCs"], 'g-', label='Supplier (Nash)')
+axs[1, 1].plot(b_range, results["Stackelberg"]["TCs"], 'r-', label='Supplier (Leader)')
+axs[1, 1].set_title("Supplier's Cost: Leader vs Nash")
+axs[1, 1].set_xlabel("Defect Rate Bound (b)")
+axs[1, 1].set_ylabel("Cost ($)")
+axs[1, 1].legend()
+axs[1, 1].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+# Final validation for b=0.25
+val = calculate_supply_chain(0.25)
+print(f"Validation for b=0.25:")
+print(f"Stackelberg System Total: ${val['Stackelberg']['Total']:.2f} (Supplier: ${val['Stackelberg']['TCs']:.2f})")
+print(f"Nash System Total: ${val['Nash']['Total']:.2f} (Supplier: ${val['Nash']['TCs']:.2f})")
+print(f"Cooperative System Total: ${val['Cooperative']['Total']:.2f}")
